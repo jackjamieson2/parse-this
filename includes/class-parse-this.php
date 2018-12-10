@@ -13,6 +13,8 @@ class Parse_This {
 
 	private $content = '';
 
+	private $response_headers = array();
+
 	/**
 	 * Constructor.
 	 *
@@ -31,6 +33,11 @@ class Parse_This {
 		}
 		return $this->$key;
 	}
+
+	public function get_response_headers() {
+		return $this->response_headers;
+	}
+
 
 	/**
 	 * Sets the source.
@@ -221,7 +228,9 @@ class Parse_This {
 	 * @param boolean $is_feed Force it to think this is an RSS/Atom feed
 	 * @return WP_Error|boolean WP_Error if invalid and true if successful
 	 */
-	public function fetch( $url = null ) {
+	public function fetch( $url = null , $conditions = null ) {
+
+
 		if ( ! $url ) {
 			$url = $this->url;
 		}
@@ -248,9 +257,26 @@ class Parse_This {
 			// Use an explicit user-agent for Parse This
 			'user-agent'          => 'Mozilla/5.0 (X11; Fedora; Linux x86_64; rv:57.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/57.0.2987.133 Safari/537.36 Parse This/WP',
 		);
+
+
+		// If conditions were sent as a parameter, add arguments for a conditional request.
+
+		if ( isset( $conditions['_etag'] ) ) {
+			$args['if-none-match'] = $conditions['_etag'];
+		}
+
+
+		if ( isset($conditions['_last_modified'] )) {
+			//$args['if-modified-since'] = $conditions['_last_modified'];
+		}
+		s
+
+
 		$response      = wp_safe_remote_head( $url, $args );
 		$response_code = wp_remote_retrieve_response_code( $response );
 		$content_type  = wp_remote_retrieve_header( $response, 'content-type' );
+
+
 		if ( is_wp_error( $response ) ) {
 			return $response;
 		}
@@ -260,6 +286,34 @@ class Parse_This {
 			default:
 				return new WP_Error( 'source_error', wp_remote_retrieve_response_message( $response ), array( 'status' => $response_code ) );
 		}
+
+
+		// Get etag and last-modified from response headers (for future conditional requests).
+
+		$etag = wp_remote_retrieve_header( $response, 'etag' );
+		/*
+		if ($etag){
+			$this->response_headers['_etag'] = $etag;  //@@ this line screws it up
+		}
+		*/
+
+
+		$last_modified = wp_remote_retrieve_header( $response, 'last-modified' );
+		/*
+		if ($last_modified){
+			$this->response_headers['_last_modified'] = $last_modified;  //@@ this line screws it up
+		}
+		*/
+
+
+		// For testing, save the response_code.
+		/*
+		$this->response_headers['_response_code'] = $response_code;
+		*/
+		// And store the request headers for further testing
+		//$this->response_headers['_request_headers'] = $args;
+
+
 
 		if ( preg_match( '#(image|audio|video|model)/#is', $content_type ) ) {
 			return new WP_Error( 'content-type', 'Content Type is Media' );
