@@ -6,6 +6,7 @@
  */
 class Parse_This {
 	private $url = '';
+	private $conditions = array();
 	private $doc;
 	private $jf2 = array();
 
@@ -21,9 +22,13 @@ class Parse_This {
 	 * @since x.x.x
 	 * @access public
 	 */
-	public function __construct( $url = null ) {
+	public function __construct( $url = null, $conditions = null ) {
 		if ( wp_http_validate_url( $url ) ) {
 			$this->url = $url;
+		}
+
+		if (is_array( $conditions ) ) {
+			$this->conditions = $conditions;
 		}
 	}
 
@@ -267,9 +272,9 @@ class Parse_This {
 
 
 		if ( isset($conditions['_last_modified'] )) {
-			//$args['if-modified-since'] = $conditions['_last_modified'];
+			$args['if-modified-since'] = $conditions['_last_modified'];
 		}
-		s
+
 
 
 		$response      = wp_safe_remote_head( $url, $args );
@@ -291,25 +296,25 @@ class Parse_This {
 		// Get etag and last-modified from response headers (for future conditional requests).
 
 		$etag = wp_remote_retrieve_header( $response, 'etag' );
-		/*
+
 		if ($etag){
-			$this->response_headers['_etag'] = $etag;  //@@ this line screws it up
+			$this->response_headers['_etag'] = $etag;
 		}
-		*/
+
 
 
 		$last_modified = wp_remote_retrieve_header( $response, 'last-modified' );
-		/*
+
 		if ($last_modified){
-			$this->response_headers['_last_modified'] = $last_modified;  //@@ this line screws it up
+			$this->response_headers['_last_modified'] = $last_modified; 
 		}
-		*/
+
 
 
 		// For testing, save the response_code.
-		/*
+
 		$this->response_headers['_response_code'] = $response_code;
-		*/
+
 		// And store the request headers for further testing
 		//$this->response_headers['_request_headers'] = $args;
 
