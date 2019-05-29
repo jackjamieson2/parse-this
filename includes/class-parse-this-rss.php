@@ -31,7 +31,7 @@ class Parse_This_RSS {
 				'_feed_type' => $type,
 				'summary'    => $feed->get_description(),
 				'author'     => self::get_author( $feed->get_author() ),
-				'name'       => $title,
+				'name'       => htmlspecialchars_decode( $title, ENT_QUOTES ),
 				'url'        => $feed->get_permalink(),
 				'photo'      => $feed->get_image_url(),
 				'items'      => $items,
