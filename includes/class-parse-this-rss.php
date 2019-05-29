@@ -75,8 +75,8 @@ class Parse_This_RSS {
 			'summary'     => wp_strip_all_tags( $item->get_description( true ) ),
 			'content'     => array_filter(
 				array(
-					'html' => htmlspecialchars( $item->get_content( true ) ),
-					'text' => wp_strip_all_tags( $item->get_content( true ) ),
+					'html'  => trim( wp_kses_post( $item->get_content() ) ),
+					'text'  => trim( str_replace( '&#xD;', "\r", wp_strip_all_tags( $item->get_content() ) ) ),
 				)
 			),
 			'published'   => $item->get_date( DATE_W3C ),
