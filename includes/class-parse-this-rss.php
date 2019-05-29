@@ -71,7 +71,7 @@ class Parse_This_RSS {
 			'type'        => 'entry',
 			'name'        => htmlspecialchars_decode( $item->get_title(), ENT_QUOTES ),
 			'author'      => self::get_author( $item->get_author() ),
-			'publication' => $title,
+			'publication' => htmlspecialchars_decode( $title, ENT_QUOTES ),
 			'summary'     => $item->get_description( true ),
 			'content'     => array_filter(
 				array(
