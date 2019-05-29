@@ -72,7 +72,7 @@ class Parse_This_RSS {
 			'name'        => htmlspecialchars_decode( $item->get_title(), ENT_QUOTES ),
 			'author'      => self::get_author( $item->get_author() ),
 			'publication' => htmlspecialchars_decode( $title, ENT_QUOTES ),
-			'summary'     => $item->get_description( true ),
+			'summary'     => wp_strip_all_tags( $item->get_description( true ) ),
 			'content'     => array_filter(
 				array(
 					'html' => htmlspecialchars( $item->get_content( true ) ),
