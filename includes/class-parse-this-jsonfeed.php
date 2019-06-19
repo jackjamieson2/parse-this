@@ -46,22 +46,31 @@ class Parse_This_JSONFeed {
 					),
 					'summary'     => self::ifset( 'summary', $item ),
 					'featured'    => self::ifset( 'image', $item ),
-					'published'   => self::ifset( 'date_published', $item ),
-					'updated'     => self::ifset( 'date_modified', $item ),
+					'published'   => normalize_iso8601( self::ifset( 'date_published', $item ) ),
+					'updated'     => normalize_iso8601( self::ifset( 'date_modified', $item ) ),
 					'author'      => self::get_author( $item ),
 					'category'    => self::ifset( 'tags', $item ),
 				)
 			);
 			if ( array_key_exists( 'attachments', $item ) ) {
 				foreach ( $item['attachments'] as $attachment ) {
-					switch ( $attachment['mime_type'] ) {
-						case 'audio/mpeg':
+					$type = explode( '/', $attachment['mime_type'] );
+					$type = array_shift( $type );
+					switch ( $type ) {
+						case 'audio':
 							$newitem['audio'] = $attachment['url'];
+							if ( isset( $attachment['duration_in_seconds'] ) ) {
+								$newitem['duration'] = seconds_to_iso8601( $attachment['duration_in_seconds'] );
+							}
 							break;
-						case 'image/jpeg':
-						case 'image/png':
-						case 'image/gif':
+						case 'image':
 							$newitem['photo'] = $attachment['url'];
+							break;
+						case 'video':
+							$newitem['video'] = $attachment['url'];
+							if ( isset( $attachment['duration_in_seconds'] ) ) {
+								$newitem['duration'] = seconds_to_iso8601( $attachment['duration_in_seconds'] );
+							}
 							break;
 					}
 				}
