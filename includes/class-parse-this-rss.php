@@ -45,7 +45,8 @@ class Parse_This_RSS {
 	public static function validate_email( $email ) {
 		$regexp = '/([a-z0-9_\.\-])+(\@|\[at\])+(([a-z0-9\-])+\.)+([a-z0-9]{2,4})+/i';
 		preg_match( $regexp, $email, $match );
-		return is_array( $match ) ? $match[0] : '';
+
+		return is_array( $match ) && ! empty( $match ) ? $match[0] : '';
 	}
 
 	/*
@@ -169,14 +170,14 @@ class Parse_This_RSS {
 					'text' => wp_strip_all_tags( htmlspecialchars_decode( $item->get_content( true ) ) ),
 				)
 			),
-			'_source'      => self::get_source( $item ),
+			'_source'      => $item->get_source( $item ),
 			'published'    => $item->get_date( DATE_W3C ),
 			'updated'      => $item->get_updated_date( DATE_W3C ),
 			'url'          => $item->get_permalink(),
 			'uid'          => $item->get_id(),
 			'location'     => self::get_location( $item ),
 			'category'     => self::get_categories( $item->get_categories() ),
-			'featured'     => self::get_thumbnail( $item ),
+			'featured'     => $item->get_thumbnail( $item ),
 		);
 
 		if ( ! is_array( $return['category'] ) ) {
@@ -211,10 +212,16 @@ class Parse_This_RSS {
 			} else {
 				$return[ $medium ] = $enclosure->get_link();
 			}
-			if ( isset( $return['category'] ) && is_array( $return['category'] ) ) {
-				$return['category'] = array_merge( $return['category'], $enclosure->get_keywords() );
+
+			if ( ! is_array( $enclosure->get_keywords() ) ) {
+				$keywords[] = $enclosure->get_keywords();
 			} else {
-				$return['category'] = $enclosure->get_keywords();
+				$keywords = $enclosure->get_keywords();
+			}
+			if ( isset( $return['category'] ) && is_array( $return['category'] ) ) {
+				$return['category'] = array_merge( $return['category'], $keywords );
+			} else {
+				$return['category'] = $keywords;
 			}
 			if ( ! isset( $return['duration'] ) ) {
 				$duration = $enclosure->get_duration();
@@ -222,7 +229,13 @@ class Parse_This_RSS {
 					$return['duration'] = seconds_to_iso8601( $duration );
 				}
 			}
-			$credits = $enclosure->get_credits();
+
+			if ( ! is_array( $enclosure->get_credits() ) ) {
+				$credits[] = $enclosure->get_credits();
+			} else {
+				$credits = $enclosure->get_credits();
+			}
+
 			foreach ( $credits as $credit ) {
 				if ( ! isset( $return['credits'] ) ) {
 					$return['credits'] = array();
@@ -252,7 +265,9 @@ class Parse_This_RSS {
 		}
 		$return['post_type'] = post_type_discovery( $return );
 		foreach ( array( 'category', 'video', 'audio' ) as $prop ) {
-			$return[ $prop ] = array_unique( $return[ $prop ] );
+			if ( isset( $return[ $prop ] ) ) {
+				$return[ $prop ] = array_unique( $return[ $prop ] );
+			}
 		}
 		return array_filter( $return );
 	}
