@@ -1,11 +1,10 @@
 <?php
 /**
- * Gathers Data for Link Previews
+ * Provides REST Endpoint to Retrieve the Parsed Data
  *
- * Parses Arbitrary URLs
  */
 
-class Parse_This_API {
+class REST_Parse_This {
 	public function __construct() {
 		add_action( 'rest_api_init', array( $this, 'register_routes' ) );
 		add_action( 'admin_menu', array( $this, 'admin_menu' ) );
@@ -43,6 +42,7 @@ class Parse_This_API {
 						<h2> <?php esc_html_e( 'Parse This Debugger', 'indieweb-post-kinds' ); ?> </h2>
 						<p> <?php esc_html_e( 'Test the Parse Tools Debugger. You can report sites to the developer for possibly improvement in future', 'parse-this' ); ?>
 						</p>
+						<a href="https://github.com/dshanske/parse-this/issues"><?php esc_html_e( 'Open an Issue', 'parse-this' ); ?></a>
 							<p> 
 							<?php
 							if ( is_plugin_active( 'parse-this/parse-this.php' ) ) {
@@ -54,7 +54,12 @@ class Parse_This_API {
 			<p><label for="url"><?php esc_html_e( 'URL', 'indieweb-post-kinds' ); ?></label><input type="url" class="widefat" name="url" id="url" /></p>
 			<p><label for="mf2"><?php esc_html_e( 'MF2', 'indieweb-post-kinds' ); ?></label><input type="checkbox" name="mf2" id="mf2" /></p>
 			<p><label for="discovery"><?php esc_html_e( 'Feed Discovery', 'indieweb-post-kinds' ); ?></label><input type="checkbox" name="discovery" id="discovery" /></p>
-			<p><label for="feed"><?php esc_html_e( 'Show Feed', 'indieweb-post-kinds' ); ?></label><input type="checkbox" name="feed" id="feed" /></p>
+			<p><label for"return"><?php esc_html_e( 'Return Type', 'indieweb-post-kinds' ); ?></label>
+				<select name="return">
+					<option value="single"><?php esc_html_e( 'Single', 'indieweb-post-kinds' ); ?></option>
+					<option value="feed"><?php esc_html_e( 'Feed', 'indieweb-post-kinds' ); ?></option>
+				</select>
+			</p>
 			<p><label for="follow"><?php esc_html_e( 'Follow Author Links', 'indieweb-post-kinds' ); ?></label><input type="checkbox" name="follow" id="follow" /></p>
 			<?php wp_nonce_field( 'wp_rest' ); ?>
 			<?php submit_button( __( 'Parse', 'indieweb-post-kinds' ) ); ?>
@@ -68,17 +73,18 @@ class Parse_This_API {
 	 * Register the Route.
 	 */
 	public static function register_routes() {
+		$cls = get_called_class();
 		register_rest_route(
 			'parse-this/1.0',
 			'/parse',
 			array(
 				array(
 					'methods'             => WP_REST_Server::READABLE,
-					'callback'            => array( 'Parse_This_API', 'read' ),
+					'callback'            => array( $cls, 'read' ),
 					'args'                => array(
 						'url' => array(
 							'required'          => true,
-							'validate_callback' => array( 'Parse_This_API', 'is_valid_url' ),
+							'validate_callback' => array( $cls, 'is_valid_url' ),
 							'sanitize_callback' => 'esc_url_raw',
 						),
 					),
@@ -93,27 +99,28 @@ class Parse_This_API {
 	public static function read( $request ) {
 		$url       = $request->get_param( 'url' );
 		$mf2       = $request->get_param( 'mf2' );
-		$feed      = $request->get_param( 'feed' );
+		$return    = $request->get_param( 'return' );
 		$discovery = $request->get_param( 'discovery' );
 		$follow    = $request->get_param( 'follow' );
-		$parse     = new Parse_This( $url );
+
+		$parse = new Parse_This( $url );
 		if ( $discovery ) {
 			return $parse->fetch_feeds();
 
 		} else {
-			$return = $parse->fetch();
+			$r = $parse->fetch();
 		}
-		if ( is_wp_error( $return ) ) {
-			return $return;
+		if ( is_wp_error( $r ) ) {
+			return $r;
 		}
 		$parse->parse(
 			array(
-				'feed'   => isset( $feed ),
-				'follow' => isset( $follow ),
+				'return' => $return,
+				'follow' => $follow,
 			)
 		);
 		if ( $mf2 ) {
-			return jf2_to_mf2( $parse->get() );
+			return $parse->get( 'mf2' );
 		}
 		return $parse->get();
 	}
@@ -136,4 +143,4 @@ class Parse_This_API {
 
 }
 
-new Parse_This_API();
+new REST_Parse_This();

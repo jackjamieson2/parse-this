@@ -183,13 +183,9 @@ class Parse_This_MF2 {
 						$data[ $p ] = self::parse_item( $v, $mf, $args );
 					} else {
 						if ( isset( $data[ $p ] ) ) {
-							if ( is_array( $data[ $p ] ) ) {
-								$data[ $p ][] = $v;
-							} elseif ( is_string( $data[ $p ] ) ) {
-								$data[ $p ] = array( $data[ $p ], $v );
-							}
+							$data[ $p ][] = $v;
 						} else {
-							$data[ $p ] = $v;
+							$data[ $p ] = array( $v );
 						}
 					}
 				}
@@ -293,8 +289,8 @@ class Parse_This_MF2 {
 			if ( ! $ensurevalid ) {
 				return $return; } else {
 				try {
-					new DateTime( $return );
-					return $return;
+					$date = new DateTime( $return );
+					return $date->format( DATE_W3C );
 				} catch ( Exception $e ) {
 					return $fallback;
 				}
@@ -321,7 +317,7 @@ class Parse_This_MF2 {
 	 * @param array      $mf2 Overall Microformats array
 	 * @param boolean $follow Follow author arrays
 	 */
-	public static function find_author( $item, $mf2, $url, $follow = false ) {
+	public static function find_author( $item, $mf2, $follow = false ) {
 		$author = array(
 			'type'  => 'card',
 			'name'  => null,
@@ -335,13 +331,7 @@ class Parse_This_MF2 {
 			// Check if any of the values of the author property are an h-card
 			foreach ( $item['properties']['author'] as $a ) {
 				if ( self::is_type( $a, 'h-card' ) ) {
-					// 5.1 "if it has an h-card, use it, exit." Unless it has no photo in which case if follow is set try to get more data.
-					if ( ! self::has_prop( $a, 'photo' ) && self::has_prop( $a, 'url' ) && $follow ) {
-						$parse = new Parse_This( self::get_plaintext( $a, 'url' ) );
-						$parse->fetch();
-						$parse->parse();
-						return $parse->get();
-					}
+					// 5.1 "if it has an h-card, use it, exit."
 					return $a;
 				} elseif ( is_string( $a ) ) {
 					if ( wp_http_validate_url( $a ) ) {
@@ -531,25 +521,35 @@ class Parse_This_MF2 {
 	 * @param string|DOMDocument|array $input HTML marked up content, HTML in DOMDocument, or array of already parsed MF2 JSON
 	 */
 	public static function parse( $input, $url, $args = array() ) {
-		$defaults = array(
+		$defaults    = array(
 			'alternate' => true, // Use rel-alternate if set for jf2 or mf2
-			'feed'      => false, // Return entire feed if found
+			'return'    => 'single',
 			'follow'    => false, // Follow author links and return parsed data
 		);
-		$args     = wp_parse_args( $args, $defaults );
+		$args        = wp_parse_args( $args, $defaults );
+		$args['url'] = $url;
+		if ( ! in_array( $args['return'], array( 'single', 'feed' ), true ) ) {
+			$args['return'] = 'single';
+		}
 		// Normalize all urls to ensure comparisons
 		$url = normalize_url( $url );
 		if ( ! class_exists( 'Mf2\Parser' ) ) {
-			require_once plugin_dir_path( __DIR__ ) . 'vendor/mf2/mf2/Mf2/Parser.php';
+			require_once plugin_dir_path( __DIR__ ) . 'lib/mf2/Parser.php';
 		}
 		if ( is_string( $input ) || is_a( $input, 'DOMDocument' ) ) {
-			$input = Mf2\parse( $input, $url );
+			$parser = new Mf2\Parser( $input, $url );
+			$input  = $parser->parse();
 			if ( $args['alternate'] ) {
 				// Check for rel-alternate jf2 or mf2 feed
 				if ( isset( $input['rel-urls'] ) ) {
 					foreach ( $input['rel-urls'] as $rel => $info ) {
 						if ( isset( $info['rels'] ) && in_array( 'alternate', $info['rels'], true ) ) {
 							if ( isset( $info['type'] ) ) {
+								if ( 'application/jf2feed+json' === $info['type'] ) {
+									$parse = new Parse_This( $rel );
+									$parse->fetch();
+									return $parse->get();
+								}
 								if ( 'application/jf2+json' === $info['type'] ) {
 									$parse = new Parse_This( $rel );
 									$parse->fetch();
@@ -576,9 +576,15 @@ class Parse_This_MF2 {
 			return array();
 		}
 
+		if ( 'feed' === $args['return'] && $count > 1 ) {
+			$input = self::normalize_feed( $input );
+			$count = count( $input['items'] );
+		}
+
 		if ( 1 === $count ) {
 			return self::parse_item( $input['items'][0], $input, $args );
 		}
+
 		$return = array();
 		$card   = null;
 		foreach ( $input['items'] as $key => $item ) {
@@ -590,40 +596,81 @@ class Parse_This_MF2 {
 					$check = self::urls_match( $url, $parsed['url'] );
 				}
 				if ( $check ) {
-					if ( ! $args['feed'] ) {
+					if ( 'feed' !== $args['return'] ) {
 						return $parsed;
-					}
-					if ( 'card' === $parsed['type'] ) {
-						unset( $input['items'][ $key ] );
-						return array_filter(
-							array(
-								'type'   => 'feed',
-								'author' => $parsed,
-								'items'  => self::parse_children( $input['items'], $input, $args ),
-								'name'   => ifset( $card['name'] ),
-								'url'    => $url,
-							)
-						);
 					}
 				}
 			}
 			$return[] = $parsed;
 		}
-
 		return $return;
 	}
 
+	// Tries to normalize a set of items into a feed
+	public static function normalize_feed( $input ) {
+		$hcard = array();
+		foreach ( $input['items'] as $key => $item ) {
+			if ( self::is_type( $item, 'h-card' ) ) {
+				$hcard = $item;
+				unset( $input['items'][ $key ] );
+				break;
+			}
+		}
+		if ( 1 === count( $input['items'] ) ) {
+			if ( self::has_prop( $input['items'][0], 'author' ) ) {
+				$input['items'][0]['properties']['author'] = array( $hcard );
+			}
+			return $input;
+		}
+		return array(
+			'items' => array(
+				array(
+					'type'       => array( 'h-feed' ),
+					'properties' => array(
+						'author' => array( $hcard ),
+					),
+					'children'   => $input['items'],
+				),
+			),
+		);
+	}
+
 	public static function parse_hfeed( $entry, $mf, $args ) {
-		$data         = array(
+		$data           = array(
 			'type'  => 'feed',
 			'items' => array(),
 		);
-		$data['name'] = self::get_plaintext( $entry, 'name' );
-		if ( isset( $entry['children'] ) && $args['feed'] ) {
+		$data['name']   = self::get_plaintext( $entry, 'name' );
+		$author         = self::find_author( $entry, $args['follow'] );
+		$data['author'] = self::parse_hcard( jf2_to_mf2( $author ), $mf, $args );
+		$data['uid']    = self::get_plaintext( $entry, 'uid' );
+		if ( isset( $entry['id'] ) && isset( $args['url'] ) && ! $data['uid'] ) {
+			$data['uid'] = $args['url'] . '#' . $entry['id'];
+		}
+
+		if ( isset( $entry['children'] ) && 'feed' === $args['return'] ) {
 			$data['items'] = self::parse_children( $entry['children'], $mf, $args );
 		}
-		return array_filter( $data );
-
+		$data    = array_filter( $data );
+		$authors = array();
+		if ( isset( $data['author'] ) ) {
+			$authors[] = $data['author'];
+		}
+		if ( isset( $data['items'] ) ) {
+			foreach ( $data['items'] as $key => $item ) {
+				foreach ( $authors as $author ) {
+					if ( is_string( $author['url'] ) ) {
+						$author['url'] = array( $author['url'] );
+					}
+					if ( in_array( $item['author']['url'], $author['url'], true ) ) {
+						$item['author'] = $author;
+						break;
+					}
+				}
+				$data['items'][ $key ] = $item;
+			}
+		}
+		return $data;
 	}
 
 	public static function parse_children( $children, $mf, $args ) {
@@ -633,7 +680,10 @@ class Parse_This_MF2 {
 			if ( isset( $args['limit'] ) && $args['limit'] === $index ) {
 				continue;
 			}
-			$items[] = self::parse_item( $child, $mf, $args );
+			$item = self::parse_item( $child, $mf, $args );
+			if ( isset( $item['type'] ) ) {
+				$items[] = $item;
+			}
 			$index++;
 		}
 		return array_filter( $items );
@@ -641,11 +691,7 @@ class Parse_This_MF2 {
 
 	public static function parse_item( $item, $mf, $args ) {
 		if ( self::is_type( $item, 'h-feed' ) ) {
-			if ( 1 !== count( $item['children'] ) ) {
-				return self::parse_hfeed( $item, $mf, $args );
-			} else {
-				return self::parse_item( $item['children'][0], $args );
-			}
+			return self::parse_hfeed( $item, $mf, $args );
 		} elseif ( self::is_type( $item, 'h-card' ) ) {
 			return self::parse_hcard( $item, $mf, $args );
 		} elseif ( self::is_type( $item, 'h-entry' ) || self::is_type( $item, 'h-cite' ) ) {
@@ -664,26 +710,46 @@ class Parse_This_MF2 {
 			return self::parse_hresume( $item, $mf, $args );
 		} elseif ( self::is_type( $item, 'h-item' ) ) {
 			return self::parse_hitem( $item, $mf, $args );
+		} elseif ( self::is_type( $item, 'h-leg' ) ) {
+			return self::parse_hleg( $item, $mf, $args );
 		}
-		return array();
+		return self::parse_hunknown( $item, $mf, $args );
 	}
 
-	public static function parse_hcite( $entry, $mf, $args ) {
-		$data         = self::get_prop_array( $entry, array_keys( $entry['properties'] ) );
-		$data['type'] = 'cite';
+	public static function compare( $string1, $string2 ) {
+		if ( empty( $string1 ) || empty( $string2 ) ) {
+			return false;
+		}
+		$string1 = trim( $string1 );
+		$string2 = trim( $string2 );
+		return ( 0 === strpos( $string1, $string2 ) );
+	}
+
+	public static function parse_hunknown( $unknown, $mf, $args ) {
+		// Parse unknown h property
+		$data         = self::parse_h( $unknown, $mf, $args );
+		$data['type'] = $unknown['type'][0];
 		return $data;
 	}
 
 	public static function parse_h( $entry, $mf, $args ) {
 		$data              = array();
 		$data['name']      = self::get_plaintext( $entry, 'name' );
-		$data['published'] = self::get_published( $entry );
-		$data['updated']   = self::get_updated( $entry );
+		$data['published'] = self::get_published( $entry, true, null );
+		$data['updated']   = self::get_updated( $entry, true, null );
 		$data['url']       = normalize_url( self::get_plaintext( $entry, 'url' ) );
-		$author            = jf2_to_mf2( self::find_author( $entry, $mf, $data['url'], $args['follow'] ) );
+		$author            = jf2_to_mf2( self::find_author( $entry, $mf, $args['follow'] ) );
 		$data['author']    = self::parse_hcard( $author, $mf, $args, $data['url'] );
 		$data['content']   = self::parse_html_value( $entry, 'content' );
 		$data['summary']   = self::get_summary( $entry, $data['content'] );
+		// If name and content are equal remove name
+		if ( self::compare( $data['name'], $data['content']['text'] ) ) {
+			unset( $data['name'] );
+		}
+		// If summary and content are equal remove summary
+		if ( self::compare( $data['summary'], $data['content']['text'] ) ) {
+			unset( $data['summary'] );
+		}
 
 		if ( isset( $mf['rels']['syndication'] ) ) {
 			if ( isset( $data['syndication'] ) ) {
@@ -694,11 +760,30 @@ class Parse_This_MF2 {
 			} else {
 				$data['syndication'] = $mf['rels']['syndication'];
 			}
-			if ( 1 === count( $data['syndication'] ) ) {
-				$data['syndication'] = array_pop( $data['syndication'] );
-			}
 		}
 		return array_filter( $data );
+	}
+
+	public static function parse_hleg( $leg, $mf, $args ) {
+		// The aaronpk special
+		$data       = array();
+		$properties = array(
+			'url',
+			'name',
+			'origin',
+			'destination',
+			'operator',
+			'transit-type',
+			'number',
+		);
+		foreach ( $properties as $property ) {
+			$data[ $property ] = self::get_plaintext( $leg, $property );
+		}
+
+		$data['departure'] = self::get_datetime_property( 'departure', $leg, true, null );
+		$data['arrival']   = self::get_datetime_property( 'arrival', $leg, true, null );
+		$data              = array_filter( $data );
+		return $data;
 	}
 
 	public static function parse_hentry( $entry, $mf, $args ) {
@@ -726,16 +811,21 @@ class Parse_This_MF2 {
 			'tag-of',
 			'location',
 			'checked-in-by',
+			'pk-ate',
+			'pk-drank',
 		);
 		$data         = self::get_prop_array( $entry, $properties );
-		$data['type'] = 'entry';
-		$properties   = array( 'url', 'weather', 'temperature', 'rsvp', 'featured', 'name', 'swarm-coins' );
+		$data['type'] = self::is_type( $entry, 'h-entry' ) ? 'entry' : 'cite';
+		$properties   = array( 'url', 'weather', 'temperature', 'rsvp', 'featured', 'swarm-coins', 'latitude', 'longitude' );
 		foreach ( $properties as $property ) {
 			$data[ $property ] = self::get_plaintext( $entry, $property );
 		}
-		$data              = array_filter( $data );
-		$data              = array_merge( $data, self::parse_h( $entry, $mf, $args ) );
-		$data['post-type'] = self::post_type_discovery( $entry );
+		$data = array_filter( $data );
+		$data = array_merge( $data, self::parse_h( $entry, $mf, $args ) );
+		if ( $args['references'] ) {
+			$data = jf2_references( $data );
+		}
+		$data['post-type'] = post_type_discovery( $data );
 		return array_filter( $data );
 	}
 
@@ -743,11 +833,44 @@ class Parse_This_MF2 {
 		if ( ! self::is_microformat( $hcard ) ) {
 			return;
 		}
-		$data         = self::get_prop_array( $hcard, array_keys( $hcard['properties'] ) );
+		$data       = array();
+		$properties = array(
+			'url',
+			'uid',
+			'name',
+			'note',
+			'photo',
+			'bday',
+			'callsign',
+			'latitude',
+			'longitude',
+			'street-address',
+			'extended-address',
+			'locality',
+			'region',
+			'country-name',
+			'label',
+			'post-office-box',
+			'given-name',
+			'honoric-prefix',
+			'additional-name',
+			'family-name',
+			'honorifix-suffix',
+			'email',
+			'postal-code',
+			'altitude',
+			'location',
+		);
+		foreach ( $properties as $property ) {
+			$data[ $property ] = self::get_plaintext( $hcard, $property );
+		}
+		$data = array_filter( $data );
+		$data = array_merge( self::get_prop_array( $hcard, array_keys( $hcard['properties'] ) ), $data );
+
 		$data['type'] = 'card';
 		if ( isset( $hcard['children'] ) ) {
 			// In the case of sites like tantek.com where multiple feeds are nested inside h-card if it is a feed request return only the first feed
-			if ( $args['feed'] && self::is_type( $hcard['children'][0], 'h-feed' ) ) {
+			if ( 'feed' === $args['return'] && self::is_type( $hcard['children'][0], 'h-feed' ) ) {
 				$feed = self::parse_hfeed( $hcard['children'][0], $mf, $args );
 				unset( $data['children'] );
 				$feed['author'] = $data;
@@ -766,7 +889,7 @@ class Parse_This_MF2 {
 			'url'  => null,
 		);
 		$data       = array_merge( $data, self::parse_h( $entry, $mf, $args ) );
-		$properties = array( 'location', 'start', 'end', 'photo' );
+		$properties = array( 'location', 'start', 'end', 'photo', 'uid', 'url' );
 		foreach ( $properties as $p ) {
 			$v = self::get_plaintext( $entry, $p );
 			if ( null !== $v ) {
@@ -791,7 +914,7 @@ class Parse_This_MF2 {
 				$data[ $p ] = $v;
 			}
 		}
-		$data = array_merge( $data, self::parse_h( $entry, $mf ) );
+		$data = array_merge( $data, self::parse_h( $entry, $mf, $args ) );
 		return array_filter( $data );
 	}
 
@@ -811,7 +934,7 @@ class Parse_This_MF2 {
 				$data[ $p ] = $v;
 			}
 		}
-		$data = array_merge( $data, self::parse_h( $entry, $mf ) );
+		$data = array_merge( $data, self::parse_h( $entry, $mf, $args ) );
 		return array_filter( $data );
 	}
 
@@ -913,56 +1036,6 @@ class Parse_This_MF2 {
 			}
 		}
 		return array_filter( $data );
-	}
-
-	public static function post_type_discovery( $mf ) {
-		if ( ! self::is_microformat( $mf ) ) {
-			return false;
-		}
-		$properties = array_keys( $mf['properties'] );
-		if ( self::is_type( $mf, 'h-entry' ) ) {
-			$map = array(
-				'rsvp'      => array( 'rsvp' ),
-				'checkin'   => array( 'checkin' ),
-				'itinerary' => array( 'itinerary' ),
-				'repost'    => array( 'repost-of' ),
-				'like'      => array( 'like-of' ),
-				'follow'    => array( 'follow-of' ),
-				'tag'       => array( 'tag-of' ),
-				'favorite'  => array( 'favorite-of' ),
-				'bookmark'  => array( 'bookmark-of' ),
-				'watch'     => array( 'watch-of' ),
-				'jam'       => array( 'jam-of' ),
-				'listen'    => array( 'listen-of' ),
-				'read'      => array( 'read-of' ),
-				'play'      => array( 'play-of' ),
-				'ate'       => array( 'eat', 'p3k-food' ),
-				'drink'     => array( 'drank' ),
-				'reply'     => array( 'in-reply-to' ),
-				'video'     => array( 'video' ),
-				'photo'     => array( 'photo' ),
-				'audio'     => array( 'audio' ),
-			);
-			foreach ( $map as $key => $value ) {
-				$diff = array_intersect( $properties, $value );
-				if ( ! empty( $diff ) ) {
-					return $key;
-				}
-			}
-			$name = static::get_plaintext( $mf, 'name' );
-			if ( ! empty( $name ) ) {
-				$name    = trim( $name );
-				$content = static::get_plaintext( $mf, 'content' );
-				if ( is_string( $content ) ) {
-					$content = trim( $content );
-					if ( 0 !== strpos( $content, $name ) ) {
-						return 'article';
-					}
-				}
-			}
-			return 'note';
-		}
-		return '';
 	}
 
 }

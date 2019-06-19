@@ -1090,14 +1090,11 @@ class Parser {
 		}
 
 		// Check for u-photo
-		if (!array_key_exists('photo', $return) && !$is_backcompat) {
-
+		if (!array_key_exists('photo', $return) && !in_array('u-', $prefixes) && !$has_nested_mf && !$is_backcompat) {
 			$photo = $this->parseImpliedPhoto($e);
-
 			if ($photo !== false) {
 				$return['photo'][] = $photo;
 			}
-
 		}
 
 		// Do we need to imply a url property?
@@ -1141,6 +1138,10 @@ class Parser {
 			'type' => $mfTypes,
 			'properties' => $return
 		);
+		
+		if(trim($e->getAttribute('id')) !== '') {
+			$parsed['id'] = trim($e->getAttribute("id"));
+		}
 
 		if($this->lang) {
 			// Language

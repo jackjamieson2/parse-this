@@ -15,23 +15,16 @@ class Parse_This_RSS {
 		$items     = array();
 		$rss_items = $feed->get_items();
 		$title     = $feed->get_title();
-		if ( $feed->get_type() & SIMPLEPIE_TYPE_NONE ) {
-			$type = 'unknown';
-		} elseif ( $feed->get_type() & SIMPLEPIE_TYPE_RSS_ALL ) {
-			$type = 'RSS';
-		} elseif ( $feed->get_type() & SIMPLEPIE_TYPE_ATOM_ALL ) {
-			$type = 'atom';
-		}
 		foreach ( $rss_items as $item ) {
 			$items[] = self::get_item( $item, $title );
 		}
 		return array_filter(
 			array(
 				'type'       => 'feed',
-				'_feed_type' => $type,
+				'_feed_type' => self::get_type( $feed ),
 				'summary'    => $feed->get_description(),
-				'author'     => self::get_author( $feed->get_author() ),
-				'name'       => $title,
+				'author'     => self::get_authors( $feed->get_author() ),
+				'name'       => htmlspecialchars_decode( $title, ENT_QUOTES ),
 				'url'        => $feed->get_permalink(),
 				'photo'      => $feed->get_image_url(),
 				'items'      => $items,
@@ -39,26 +32,122 @@ class Parse_This_RSS {
 		);
 	}
 
+	public static function get_type( $feed ) {
+		if ( $feed->get_type() & SIMPLEPIE_TYPE_NONE ) {
+			return 'unknown';
+		} elseif ( $feed->get_type() & SIMPLEPIE_TYPE_RSS_ALL ) {
+			return 'RSS';
+		} elseif ( $feed->get_type() & SIMPLEPIE_TYPE_ATOM_ALL ) {
+			return 'atom';
+		}
+	}
+
+	public static function validate_email( $email ) {
+		$regexp = '/([a-z0-9_\.\-])+(\@|\[at\])+(([a-z0-9\-])+\.)+([a-z0-9]{2,4})+/i';
+		preg_match( $regexp, $email, $match );
+		return is_array( $match ) ? $match[0] : '';
+	}
+
 	/*
 	 * Takes a SimplePie_Author object and Turns it into a JF2 Author property
 	 * @param SimplePie_Author $author
 	 * @return JF2 array
 	 */
-	public static function get_author( $author ) {
+	public static function get_authors( $author ) {
 		if ( ! $author ) {
 			return array();
 		}
-		$return = array_filter(
-			array(
-				'name'  => $author->get_name(),
-				'url'   => $author->get_link(),
-				'email' => $author->get_email(),
-			)
-		);
+		if ( $author instanceof SimplePie_Author ) {
+			$author = array( $author );
+		}
+		$return = array();
+		foreach ( $author as $a ) {
+			$r     = array(
+				'type'  => 'card',
+				'name'  => htmlspecialchars_decode( $a->get_name() ),
+				'url'   => $a->get_link(),
+				'email' => self::validate_email( $a->get_email() ),
+			);
+			$dom   = pt_load_domdocument( $r['name'] );
+			$links = $dom->getElementsByTagName( 'a' );
+			$names = array();
+			foreach ( $links as $link ) {
+					$names[ wp_strip_all_tags( $link->nodeValue ) ] = $link->getAttribute( 'href' ); // phpcs:ignore
+			}
+			if ( ! empty( $names ) ) {
+				if ( 1 === count( $names ) ) {
+					reset( $names );
+					$r['name'] = key( $names );
+				} else {
+					foreach ( $names as $name => $url ) {
+						$return[] = array(
+							'type' => 'card',
+							'name' => $name,
+							'url'  => $url,
+						);
+					}
+				}
+			} else {
+				$r['name'] = wp_strip_all_tags( $r['name'] );
+				$return[]  = array_filter( $r );
+			}
+		}
 		if ( 1 === count( $return ) ) {
-			$return = array_pop( $return );
+			$return = array_shift( $return );
 		}
 		return $return;
+	}
+
+	public static function credit_to_card( $credit ) {
+		if ( ! $credit instanceof SimplePie_Credit ) {
+			return null;
+		}
+		return array(
+			'type' => 'card',
+			'role' => $credit->get_role(),
+			'name' => $credit->get_name(),
+		);
+	}
+
+	public static function source_to_cite( $source ) {
+		if ( ! $source instanceof SimplePie_Source ) {
+			return null;
+		}
+		return array_filter(
+			array(
+				'type'    => 'cite',
+				'name'    => $source->get_title(),
+				'summary' => $source->get_description(),
+				'url'     => $source->get_permalink(),
+				'author'  => self::get_authors( $source->get_authors() ),
+				'photo'   => $sourece->get_image_url(),
+			)
+		);
+	}
+
+
+	public function get_source( $item ) {
+		$return = $item->get_item_tags( SIMPLEPIE_NAMESPACE_RSS_20, 'source' );
+		if ( $return ) {
+			return array(
+				'url'  => $return[0]['attribs']['']['url'],
+				'name' => $return[0]['data'],
+			);
+		}
+		return self::source_to_cite( $item->get_source() );
+	}
+
+	public function get_thumbnail( $item ) {
+		if ( method_exists( $item, 'get_thumbnail' ) ) {
+			$return = $item->get_thumbnail();
+			if ( is_string( $return ) ) {
+				return $return;
+			}
+			if ( is_array( $return ) && isset( $return['url'] ) ) {
+				return $return['url'];
+			}
+		}
+		return null;
 	}
 
 	/*
@@ -67,43 +156,52 @@ class Parse_This_RSS {
 	 * @return JF2
 	 */
 	public static function get_item( $item, $title = '' ) {
-		$return     = array(
-			'type'        => 'entry',
-			'name'        => htmlspecialchars_decode( $item->get_title(), ENT_QUOTES ),
-			'author'      => self::get_author( $item->get_author() ),
-			'publication' => $title,
-			'summary'     => $item->get_description( true ),
-			'content'     => array_filter(
+		$return = array(
+			'type'         => 'entry',
+			'name'         => $item->get_title(),
+			'author'       => self::get_authors( $item->get_authors() ),
+			'contributors' => self::get_authors( $item->get_contributors() ),
+			'publication'  => $title,
+			'summary'      => wp_strip_all_tags( $item->get_description( true ) ),
+			'content'      => array_filter(
 				array(
-					'html' => htmlspecialchars( $item->get_content( true ) ),
-					'text' => wp_strip_all_tags( $item->get_content( true ) ),
+					'html' => parse_this_clean_content( $item->get_content( true ) ),
+					'text' => wp_strip_all_tags( htmlspecialchars_decode( $item->get_content( true ) ) ),
 				)
 			),
-			'published'   => $item->get_date( DATE_W3C ),
-			'updated'     => $item->get_updated_date( DATE_W3C ),
-			'url'         => $item->get_permalink(),
-			'uid'         => $item->get_id(),
-			'location'    => self::get_location( $item ),
-			'category'    => self::get_categories( $item->get_categories() ),
+			'_source'      => self::get_source( $item ),
+			'published'    => $item->get_date( DATE_W3C ),
+			'updated'      => $item->get_updated_date( DATE_W3C ),
+			'url'          => $item->get_permalink(),
+			'uid'          => $item->get_id(),
+			'location'     => self::get_location( $item ),
+			'category'     => self::get_categories( $item->get_categories() ),
+			'featured'     => self::get_thumbnail( $item ),
 		);
+
+		if ( ! is_array( $return['category'] ) ) {
+			$return['category'] = array();
+		}
+
 		$enclosures = $item->get_enclosures();
 		foreach ( $enclosures as $enclosure ) {
-			$medium = $enclosure->get_medium();
-			if ( 'image' === $medium ) {
-				$medium = 'photo';
-			}
+			$medium = $enclosure->get_type();
 			if ( ! $medium ) {
-				$medium = $enclosure->get_type();
-				switch ( $medium ) {
-					case 'audio/mpeg':
-						$medium = 'audio';
-						break;
-					case 'image/jpeg':
-					case 'image/png':
-					case 'image/gif':
-						$medium = 'photo';
-						break;
-				}
+				$medium = $enclosure->get_medium();
+			} else {
+				$medium = explode( '/', $medium );
+				$medium = array_shift( $medium );
+			}
+			switch ( $medium ) {
+				case 'audio':
+					$medium = 'audio';
+					break;
+				case 'image':
+					$medium = 'photo';
+					break;
+				case 'video':
+					$medium = 'video';
+					break;
 			}
 			if ( array_key_exists( $medium, $return ) ) {
 				if ( is_string( $return[ $medium ] ) ) {
@@ -113,13 +211,49 @@ class Parse_This_RSS {
 			} else {
 				$return[ $medium ] = $enclosure->get_link();
 			}
+			if ( isset( $return['category'] ) && is_array( $return['category'] ) ) {
+				$return['category'] = array_merge( $return['category'], $enclosure->get_keywords() );
+			} else {
+				$return['category'] = $enclosure->get_keywords();
+			}
+			if ( ! isset( $return['duration'] ) ) {
+				$duration = $enclosure->get_duration();
+				if ( 0 < $duration ) {
+					$return['duration'] = seconds_to_iso8601( $duration );
+				}
+			}
+			$credits = $enclosure->get_credits();
+			foreach ( $credits as $credit ) {
+				if ( ! isset( $return['credits'] ) ) {
+					$return['credits'] = array();
+				}
+				$return['credits'][] = self::credit_to_card( $credit );
+			}
 		}
 		// If there is just one photo it is probably the featured image
-		if ( isset( $return['photo'] ) && is_string( $return['photo'] ) ) {
+		if ( isset( $return['photo'] ) && is_string( $return['photo'] ) && empty( $return['featured'] ) ) {
 			$return['featured'] = $return['photo'];
 			unset( $return['photo'] );
 		}
-		$return['post_type'] = Parse_This_MF2::post_type_discovery( jf2_to_mf2( $return ) );
+		if ( empty( $return['featured'] ) ) {
+			$i = $item->get_item_tags( SIMPLEPIE_NAMESPACE_ITUNES, 'image' );
+			if ( is_array( $i ) ) {
+				$i = array_shift( $i );
+				if ( isset( $i['attribs'] ) && is_array( $i['attribs'] ) ) {
+					$i = array_shift( $i['attribs'] );
+					if ( isset( $i['href'] ) ) {
+						$i = $i['href'];
+					}
+				}
+			}
+			if ( is_string( $i ) ) {
+				$return['featured'] = $i;
+			}
+		}
+		$return['post_type'] = post_type_discovery( $return );
+		foreach ( array( 'category', 'video', 'audio' ) as $prop ) {
+			$return[ $prop ] = array_unique( $return[ $prop ] );
+		}
 		return array_filter( $return );
 	}
 
@@ -135,7 +269,7 @@ class Parse_This_RSS {
 	}
 
 	private static function get_location_name( $item ) {
-		$return = $item->get_item_tags( SIMPLEPIE_NAMESPACE_GEORSS, 'featureName' );
+		$return = $item->get_item_tags( SIMPLEPIE_NAMESPACE_W3C_BASIC_GEO, 'featureName' );
 		if ( $return ) {
 			return $return[0]['data'];
 		}

@@ -18,15 +18,15 @@ if ( ! function_exists( 'jf2_to_mf2' ) ) {
 			}
 			if ( ! wp_is_numeric_array( $value ) && is_array( $value ) && array_key_exists( 'type', $value ) ) {
 				$value = jf2_to_mf2( $value );
-			} elseif ( wp_is_numeric_array( $value ) && is_array( $value[0] ) && array_key_exists( 'type', $value[0] ) ) {
-				foreach ( $value as $item ) {
-					$items[] = jf2_to_mf2( $item );
+			} elseif ( wp_is_numeric_array( $value ) ) {
+				if ( is_array( $value[0] ) && array_key_exists( 'type', $value[0] ) ) {
+					foreach ( $value as $item ) {
+						$items[] = jf2_to_mf2( $item );
+					}
+					$value = $items;
 				}
-				$value = $items;
 			} elseif ( ! wp_is_numeric_array( $value ) ) {
 				$value = array( $value );
-			} else {
-				continue;
 			}
 			$return['properties'][ $key ] = $value;
 		}
@@ -48,7 +48,7 @@ if ( ! function_exists( 'mf2_to_jf2' ) ) {
 		$jf2['type'] = str_replace( 'h-', '', $type );
 		if ( isset( $entry['properties'] ) && is_array( $entry['properties'] ) ) {
 			foreach ( $entry['properties'] as $key => $value ) {
-				if ( is_array( $value ) && 1 === count( $value ) ) {
+				if ( is_array( $value ) && 1 === count( $value ) && wp_is_numeric_array( $value ) ) {
 					$value = array_pop( $value );
 				}
 				if ( ! wp_is_numeric_array( $value ) && isset( $value['type'] ) ) {
@@ -63,6 +63,30 @@ if ( ! function_exists( 'mf2_to_jf2' ) ) {
 			}
 		}
 		return $jf2;
+	}
+}
+
+
+if ( ! function_exists( 'jf2_references' ) ) {
+	/* Turns nested properties into references per the jf2 spec
+	*/
+	function jf2_references( $data ) {
+		foreach ( $data as $key => $value ) {
+			if ( ! is_array( $value ) ) {
+				continue;
+			}
+			// Indicates nested type
+			if ( array_key_exists( 'type', $value ) && 'cite' === $value['type'] ) {
+				if ( ! isset( $data['references'] ) ) {
+					$data['references'] = array();
+				}
+				if ( isset( $value['url'] ) ) {
+					$data['references'][ $value['url'] ] = $value;
+					$data[ $key ]                        = array( $value['url'] );
+				}
+			}
+		}
+		return $data;
 	}
 }
 
@@ -194,7 +218,7 @@ if ( ! function_exists( 'build_url' ) ) {
 
 
 if ( ! function_exists( 'normalize_url' ) ) {
-		// Adds slash if no path is in the URL, and convert hostname to lowercase
+	// Adds slash if no path is in the URL, and convert hostname to lowercase
 	function normalize_url( $url ) {
 			$parts = wp_parse_url( $url );
 		if ( empty( $parts['path'] ) ) {
@@ -204,5 +228,163 @@ if ( ! function_exists( 'normalize_url' ) ) {
 				$parts['host'] = strtolower( $parts['host'] );
 				return build_url( $parts );
 		}
+	}
+}
+
+if ( ! function_exists( 'normalize_iso8601' ) ) {
+	// Tries to normalizes dates to a standard iso8601 string
+	function normalize_iso8601( $string ) {
+		$date = new DateTime( $string );
+		if ( $date ) {
+			$date->format( DATE_W3C );
+		}
+		return $string;
+	}
+}
+
+if ( ! function_exists( 'post_type_discovery' ) ) {
+	function post_type_discovery( $jf2 ) {
+		if ( ! is_array( $jf2 ) ) {
+			return '';
+		}
+		if ( array_key_exists( 'properties', $jf2 ) ) {
+			$jf2 = mf2_to_jf2( $jf2 );
+		}
+		if ( ! array_key_exists( 'type', $jf2 ) ) {
+			return '';
+		}
+		if ( 'event' === $jf2['type'] ) {
+			return 'event';
+		}
+		if ( 'entry' === $jf2['type'] ) {
+			$map = array(
+				'rsvp'      => array( 'rsvp' ),
+				'checkin'   => array( 'checkin' ),
+				'itinerary' => array( 'itinerary' ),
+				'repost'    => array( 'repost-of' ),
+				'like'      => array( 'like-of' ),
+				'follow'    => array( 'follow-of' ),
+				'tag'       => array( 'tag-of' ),
+				'favorite'  => array( 'favorite-of' ),
+				'bookmark'  => array( 'bookmark-of' ),
+				'watch'     => array( 'watch-of' ),
+				'jam'       => array( 'jam-of' ),
+				'listen'    => array( 'listen-of' ),
+				'read'      => array( 'read-of' ),
+				'play'      => array( 'play-of' ),
+				'eat'       => array( 'ate', 'pk-ate' ),
+				'drink'     => array( 'drank', 'pk-drank' ),
+				'reply'     => array( 'in-reply-to' ),
+				'video'     => array( 'video' ),
+				'photo'     => array( 'photo' ),
+				'audio'     => array( 'audio' ),
+			);
+			foreach ( $map as $key => $value ) {
+				$diff = array_intersect( array_keys( $jf2 ), $value );
+				if ( ! empty( $diff ) ) {
+					return $key;
+				}
+			}
+			if ( isset( $jf2['name'] ) && ! empty( $jf2['name'] ) ) {
+				$jf2['name'] = $jf2['name'];
+				$content     = ifset( $jf2['content'] );
+				if ( ! $content ) {
+					$content = ifset( $jf2['summary'] );
+				}
+				if ( is_array( $content ) && array_key_exists( 'text', $content ) ) {
+					$content = $content['text'];
+				}
+				if ( is_string( $content ) ) {
+					$content = trim( $content );
+					if ( 0 !== strpos( $content, $jf2['name'] ) ) {
+						return 'article';
+					}
+				}
+			}
+				return 'note';
+		}
+		return '';
+	}
+}
+
+function parse_this_clean_content( $content ) {
+	$allowed = array(
+		'a'          => array(
+			'href' => array(),
+			'name' => array(),
+		),
+		'abbr'       => array(),
+		'b'          => array(),
+		'br'         => array(),
+		'code'       => array(),
+		'del'        => array(),
+		'em'         => array(),
+		'i'          => array(),
+		'q'          => array(),
+		'strike'     => array(),
+		'strong'     => array(),
+		'time'       => array(),
+		'blockquote' => array(),
+		'pre'        => array(),
+		'p'          => array(),
+		'h1'         => array(),
+		'h2'         => array(),
+		'h3'         => array(),
+		'h4'         => array(),
+		'h5'         => array(),
+		'h6'         => array(),
+		'ul'         => array(),
+		'li'         => array(),
+		'ol'         => array(),
+		'span'       => array(),
+		'img'        => array(
+			'src'   => array(),
+			'alt'   => array(),
+			'title' => array(),
+		),
+	);
+	return trim( wp_kses( $content, $allowed ) );
+}
+
+if ( ! function_exists( 'seconds_to_iso8601' ) ) {
+	function seconds_to_iso8601( $second ) {
+		$h   = intval( $second / 3600 );
+		$m   = intval( ( $second - $h * 3600 ) / 60 );
+		$s   = $second - ( $h * 3600 + $m * 60 );
+		$ret = 'PT';
+		if ( $h ) {
+			$ret .= $h . 'H';
+		}
+		if ( $m ) {
+			$ret .= $m . 'M';
+		}
+		if ( ( ! $h && ! $m ) || $s ) {
+			$ret .= $s . 'S';
+		}
+		return $ret;
+	}
+}
+
+if ( ! function_exists( 'pt_load_domdocument' ) ) {
+	function pt_load_domdocument( $content ) {
+		if ( ! class_exists( '\Masterminds\HTML5', false ) ) {
+			$file = plugin_dir_path( __DIR__ ) . 'lib/html5/autoloader.php';
+			if ( file_exists( $file ) ) {
+				require_once $file;
+			}
+		}
+		if ( class_exists( 'Masterminds\\HTML5' ) ) {
+			$doc = new \Masterminds\HTML5( array( 'disable_html_ns' => true ) );
+			$doc = $doc->loadHTML( $content );
+		} else {
+			$doc = new DOMDocument();
+			libxml_use_internal_errors( true );
+			if ( function_exists( 'mb_convert_encoding' ) ) {
+				$content = mb_convert_encoding( $content, 'HTML-ENTITIES', mb_detect_encoding( $content ) );
+			}
+			$doc->loadHTML( $content );
+			libxml_use_internal_errors( false );
+		}
+		return $doc;
 	}
 }
